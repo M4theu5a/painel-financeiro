@@ -14,8 +14,13 @@ router.post('/cadastrar', async (req, res) => {
       [nome, email, senha_hash]
     );
     res.status(201).json(result.rows[0]);
-  } catch {
-    res.status(400).json({ erro: 'E-mail já cadastrado' });
+  } catch (err) {
+    console.error('Erro no cadastro:', err.message);
+    if (err.code === '23505') {
+      res.status(400).json({ erro: 'E-mail já cadastrado' });
+    } else {
+      res.status(500).json({ erro: 'Erro ao cadastrar', detalhes: err.message });
+    }
   }
 });
 
