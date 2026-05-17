@@ -20,10 +20,11 @@ import { useTheme } from '@/context/ThemeContext';
 import {
   TrendingUp, TrendingDown, Wallet, LogOut, Moon, Sun,
   Plus, Trash2, ChevronLeft, ChevronRight, BarChart3,
+  ArchiveRestore, ChevronUp, ChevronDown, ChevronsUpDown
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell, Legend,
+  ResponsiveContainer, Cell
 } from 'recharts';
 
 const MESES = [
@@ -39,6 +40,10 @@ const CATEGORIAS = {
 function Home() {
   const [resumo, setResumo] = useState({ receitas: 0, despesas: 0, saldo: 0 });
   const [transacoes, setTransacoes] = useState([]);
+  const [transacoesExcluidas, setTransacoesExcluidas] = useState([]);
+  const [aba, setAba] = useState('ativas'); // 'ativas' | 'excluidas'
+  const [sortConfig, setSortConfig] = useState({ key: 'data', direction: 'desc' });
+  
   const [mes, setMes] = useState(new Date().getMonth() + 1);
   const [ano, setAno] = useState(new Date().getFullYear());
   const [dialogAberto, setDialogAberto] = useState(false);
@@ -66,12 +71,14 @@ function Home() {
   const carregarDados = async () => {
     setLoading(true);
     try {
-      const [resResumo, resTransacoes] = await Promise.all([
+      const [resResumo, resTransacoes, resExcluidas] = await Promise.all([
         api.get(`/transacoes/resumo?mes=${mes}&ano=${ano}`),
         api.get(`/transacoes?mes=${mes}&ano=${ano}`),
+        api.get(`/transacoes/excluidos?mes=${mes}&ano=${ano}`),
       ]);
       setResumo(resResumo.data);
       setTransacoes(resTransacoes.data);
+      setTransacoesExcluidas(resExcluidas.data);
     } catch (error) {
       if (error.response?.status === 401 || error.response?.status === 403) {
         handleLogout();
@@ -103,13 +110,21 @@ function Home() {
   };
 
   const handleDeletar = async (id) => {
-    if (window.confirm('Tem certeza que deseja remover esta transação?')) {
-      try {
-        await api.delete(`/transacoes/${id}`);
-        carregarDados();
-      } catch {
-        alert('Erro ao remover transação');
-      }
+    try {
+      await api.delete(`/transacoes/${id}`);
+      carregarDados();
+    } catch (err) {
+      console.error('Erro ao deletar:', err);
+      alert('Erro ao remover transação: ' + (err.response?.data?.erro || err.message));
+    }
+  };
+
+  const handleRestaurar = async (id) => {
+    try {
+      await api.patch(`/transacoes/${id}/restaurar`);
+      carregarDados();
+    } catch {
+      alert('Erro ao restaurar transação');
     }
   };
 
@@ -120,6 +135,37 @@ function Home() {
     if (novoMes < 1) { novoMes = 12; novoAno--; }
     setMes(novoMes);
     setAno(novoAno);
+  };
+  
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  const getSortedData = (data) => {
+    if (!sortConfig) return data;
+    return [...data].sort((a, b) => {
+      let aValue = a[sortConfig.key];
+      let bValue = b[sortConfig.key];
+
+      if (sortConfig.key === 'data') {
+         aValue = new Date(a.data).getTime();
+         bValue = new Date(b.data).getTime();
+      } else if (sortConfig.key === 'valor') {
+         aValue = Number(a.valor);
+         bValue = Number(b.valor);
+      } else {
+         aValue = String(aValue || '').toLowerCase();
+         bValue = String(bValue || '').toLowerCase();
+      }
+
+      if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
+      if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+      return 0;
+    });
   };
 
   // Dados do gráfico
@@ -134,11 +180,26 @@ function Home() {
       return (
         <div className="bg-card border border-border rounded-lg p-3 shadow-lg text-sm">
           <p className="font-medium text-foreground">{label}</p>
-          <p className="text-muted-foreground">R$ {Number(payload[0].value).toFixed(2)}</p>
+          <p className="text-muted-foreground">{formatarMoeda(payload[0].value)}</p>
         </div>
       );
     }
     return null;
+  };
+
+  const SortIcon = ({ columnKey }) => {
+    if (sortConfig?.key !== columnKey) return <ChevronsUpDown className="h-3 w-3 ml-1 inline-block opacity-40" />;
+    if (sortConfig.direction === 'asc') return <ChevronUp className="h-3 w-3 ml-1 inline-block" />;
+    return <ChevronDown className="h-3 w-3 ml-1 inline-block" />;
+  };
+
+  const transacoesExibidas = getSortedData(aba === 'ativas' ? transacoes : transacoesExcluidas);
+
+  const formatarMoeda = (valor) => {
+    return new Intl.NumberFormat('pt-BR', {
+      style: 'currency',
+      currency: 'BRL'
+    }).format(Number(valor));
   };
 
   return (
@@ -310,7 +371,7 @@ function Home() {
                 </div>
               </div>
               <p className="text-2xl font-bold text-green-600 dark:text-green-400">
-                R$ {Number(resumo.receitas).toFixed(2)}
+                {formatarMoeda(resumo.receitas)}
               </p>
             </CardContent>
           </Card>
@@ -324,7 +385,7 @@ function Home() {
                 </div>
               </div>
               <p className="text-2xl font-bold text-red-600 dark:text-red-400">
-                R$ {Number(resumo.despesas).toFixed(2)}
+                {formatarMoeda(resumo.despesas)}
               </p>
             </CardContent>
           </Card>
@@ -338,7 +399,7 @@ function Home() {
                 </div>
               </div>
               <p className={`text-2xl font-bold ${resumo.saldo >= 0 ? 'text-primary' : 'text-orange-600 dark:text-orange-400'}`}>
-                R$ {Number(resumo.saldo).toFixed(2)}
+                {formatarMoeda(resumo.saldo)}
               </p>
             </CardContent>
           </Card>
@@ -369,8 +430,8 @@ function Home() {
                   axisLine={false}
                   tickLine={false}
                 />
-                <Tooltip content={<CustomTooltip />} />
-                <Bar dataKey="valor" radius={[8, 8, 0, 0]} maxBarSize={80} minPointSize={4}>
+                <Tooltip content={<CustomTooltip />} cursor={false} />
+                <Bar dataKey="valor" radius={[8, 8, 0, 0]} maxBarSize={80} minPointSize={4} activeBar={false}>
                   {dadosGrafico.map((entry, index) => (
                     <Cell key={`cell-${index}`} fill={entry.fill} fillOpacity={0.9} />
                   ))}
@@ -383,34 +444,87 @@ function Home() {
         {/* Tabela de Transações */}
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Transações</CardTitle>
-            <CardDescription>
-              {transacoes.length === 0
-                ? 'Nenhuma transação registrada neste período.'
-                : `${transacoes.length} transaç${transacoes.length === 1 ? 'ão' : 'ões'} encontrada${transacoes.length === 1 ? '' : 's'}.`}
-            </CardDescription>
+            <div className="flex items-center justify-between">
+              <div>
+                <CardTitle className="text-base">Transações</CardTitle>
+                <CardDescription>
+                  {transacoesExibidas.length === 0
+                    ? 'Nenhuma transação neste período.'
+                    : `${transacoesExibidas.length} transaç${transacoesExibidas.length === 1 ? 'ão' : 'ões'}.`}
+                </CardDescription>
+              </div>
+            </div>
+            
+            {/* Tabs de Status */}
+            <div className="flex items-center gap-6 mt-4 pt-2 border-b border-border/50">
+              <button 
+                className={`pb-3 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 ${aba === 'ativas' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                onClick={() => setAba('ativas')}
+              >
+                Ativas
+                <span className={`text-xs px-2 py-0.5 rounded-full ${aba === 'ativas' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                  {transacoes.length}
+                </span>
+              </button>
+              <button 
+                className={`pb-3 text-sm font-medium transition-colors border-b-2 flex items-center gap-2 ${aba === 'excluidas' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'}`}
+                onClick={() => setAba('excluidas')}
+              >
+                Excluídas
+                <span className={`text-xs px-2 py-0.5 rounded-full ${aba === 'excluidas' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground'}`}>
+                  {transacoesExcluidas.length}
+                </span>
+              </button>
+            </div>
           </CardHeader>
           <CardContent className="p-0">
-            {transacoes.length === 0 ? (
+            {transacoesExibidas.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-muted-foreground">
                 <Wallet className="h-12 w-12 mb-3 opacity-30" />
-                <p className="text-sm">Adicione sua primeira transação!</p>
+                <p className="text-sm">
+                  {aba === 'ativas' ? 'Adicione sua primeira transação!' : 'Nenhuma transação excluída.'}
+                </p>
               </div>
             ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Data</TableHead>
-                    <TableHead>Categoria</TableHead>
-                    <TableHead className="hidden sm:table-cell">Descrição</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead className="text-right">Valor</TableHead>
-                    <TableHead className="w-16"></TableHead>
+                    <TableHead 
+                      className="cursor-pointer select-none hover:text-foreground transition-colors group" 
+                      onClick={() => handleSort('data')}
+                    >
+                      Data <SortIcon columnKey="data" />
+                    </TableHead>
+                    <TableHead 
+                      className="cursor-pointer select-none hover:text-foreground transition-colors group"
+                      onClick={() => handleSort('categoria')}
+                    >
+                      Categoria <SortIcon columnKey="categoria" />
+                    </TableHead>
+                    <TableHead 
+                      className="hidden sm:table-cell cursor-pointer select-none hover:text-foreground transition-colors group"
+                      onClick={() => handleSort('descricao')}
+                    >
+                      Descrição <SortIcon columnKey="descricao" />
+                    </TableHead>
+                    <TableHead 
+                      className="cursor-pointer select-none hover:text-foreground transition-colors group"
+                      onClick={() => handleSort('tipo')}
+                    >
+                      Tipo <SortIcon columnKey="tipo" />
+                    </TableHead>
+                    <TableHead 
+                      className="text-right cursor-pointer select-none hover:text-foreground transition-colors group"
+                      onClick={() => handleSort('valor')}
+                    >
+                      Valor <SortIcon columnKey="valor" />
+                    </TableHead>
+                    <TableHead className="w-16 text-center">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {transacoes.map(t => (
-                    <TableRow key={t.id}>
+                  {transacoesExibidas.map(t => (
+                    <TableRow key={t.id} className={aba === 'excluidas' ? 'opacity-75 bg-muted/20' : ''}>
                       <TableCell className="text-muted-foreground whitespace-nowrap">
                         {new Date(t.data).toLocaleDateString('pt-BR', { timeZone: 'UTC' })}
                       </TableCell>
@@ -424,17 +538,30 @@ function Home() {
                         </Badge>
                       </TableCell>
                       <TableCell className={`text-right font-semibold ${t.tipo === 'receita' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'}`}>
-                        {t.tipo === 'receita' ? '+' : '-'} R$ {Number(t.valor).toFixed(2)}
+                        {t.tipo === 'receita' ? '+' : '-'} {formatarMoeda(t.valor).replace(/^R\$\s*/, 'R$ ')}
                       </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => handleDeletar(t.id)}
-                          className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
+                      <TableCell className="text-center">
+                        {aba === 'ativas' ? (
+                          <Button
+                            title="Mover para lixeira"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleDeletar(t.id)}
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        ) : (
+                          <Button
+                            title="Restaurar transação"
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => handleRestaurar(t.id)}
+                            className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                          >
+                            <ArchiveRestore className="h-4 w-4" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
